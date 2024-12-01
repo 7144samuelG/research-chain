@@ -38,7 +38,7 @@ const Researcher = Record({
 // Research Proposal
 const ResearchProposal = Record({
   id: text,
-  researcherId: text,
+  researcherId:Principal,//changed from text to Principal id of the owner
   title: text,
   description: text,
   methodology: text,
@@ -80,6 +80,7 @@ const Message = Variant({
   Error: text,
   NotFound: text,
   InvalidPayload: text,
+  MissingCredentials:text //added a new error variant
 });
 
 // Payload Structures
@@ -93,7 +94,7 @@ const researcherPayload = Record({
 });
 
 const CreateProposalPayload = Record({
-  researcherId: text,
+ // researcherId: text, undo researcher id
   title: text,
   description: text,
   methodology: text,
@@ -130,8 +131,24 @@ const SubmitProofPayload = Record({
   results_hash: text,
 });
 
+
+//added payload  to get researcher
+const getResearcherById=Record({
+    researcherid:Principal
+});
+
+//added proposal id
+const getProposalByIdPayload=Record({
+    proposalid:text
+})
+
+//added getProposals by researcher id
+
+const getProposalsByResearcherid=Record({
+    researcherid:Principal
+})
 // Storage Maps
-const researchers = StableBTreeMap(0, text, Researcher);
+const researchers = StableBTreeMap(0, Principal, Researcher);  //changed from text to Principal
 const proposals = StableBTreeMap(1, text, ResearchProposal);
 const milestones = StableBTreeMap(2, text, Milestone);
 const reviews = StableBTreeMap(3, text, Review);
@@ -172,15 +189,15 @@ export default Canister({
         return Err({ InvalidPayload: "Phone number must be 10-15 digits." });
       }
 
-      // Check if researcher already exists (optional)
-      const existingResearchers = researchers.values();
-      const duplicateResearcher = existingResearchers.find(
-        (r) => r.email === email || r.phone === phone
-      );
-
-      if (duplicateResearcher) {
+    //   // Check if researcher already exists (optional)
+    //   const existingResearchers = researchers.values();
+    //   const duplicateResearcher = existingResearchers.find(
+    //     (r) => r.email === email || r.phone === phone
+    //   );
+    const existingResearchers = researchers.get(ic.caller()).Some;
+      if (existingResearchers) {
         return Err({
-          InvalidPayload: "Researcher with this email or phone already exists.",
+          InvalidPayload: "Researcher already exists.",
         });
       }
 
@@ -200,7 +217,7 @@ export default Canister({
       };
 
       try {
-        researchers.insert(id, researcher);
+        researchers.insert(ic.caller(), researcher);//changed it
         return Ok(researcher);
       } catch (error) {
         return Err({
@@ -214,9 +231,16 @@ export default Canister({
 
   // Function to get researcher by ID
   getResearcherById: query(
-    [text], // researcher_id
+    [getResearcherById], // researcher_id
     Result(Researcher, Message),
     (researcherId) => {
+
+        //verify that the payload is not empty
+        if(!researcherId.researcherid){
+            return Err({
+                MissingCredentials:"researcher id is missing"
+            })
+        }
       const researcherOpt = researchers.get(researcherId);
 
       if ("None" in researcherOpt) {
@@ -241,20 +265,17 @@ export default Canister({
   }),
 
   // Function to get researcher by owner using filter
-  getResearcherByOwner: query([], Result(Researcher, Message), () => {
-    const researcherOpt = researchers.values().filter((researcher) => {
-      return (
-        researcher.owner.toText() === ic.caller().toText // Filter by owner
-      );
-    });
 
-    if (researcherOpt.length === 0) {
-      return Err({
-        NotFound: `Researcher with owner=${ic.caller()} not found.`,
-      });
-    }
+  //changed it to get my profile as a researcher and optimized it
+  getMyProfile: query([], Result(Researcher, Message), () => {
+     const myprofile=researchers.get(ic.caller()).Some;
 
-    return Ok(researcherOpt[0]);
+     if(!myprofile){
+        return Err({
+            NotFound:"dont have a resaecher profile"
+        })
+     }
+    return Ok(myprofile);
   }),
 
   // Create Proposal
@@ -262,7 +283,7 @@ export default Canister({
     [CreateProposalPayload],
     Result(ResearchProposal, Message),
     (payload) => {
-      const { researcherId, title, description, methodology, funding_target } =
+      const {  title, description, methodology, funding_target } =
         payload;
 
       if (!title || !description || !methodology || funding_target <= 0n) {
@@ -273,18 +294,17 @@ export default Canister({
       }
 
       // Check if researcher exists
-      const researcherOpt = researchers.get(researcherId);
+      const researcherOpt = researchers.get(ic.caller()).Some;
 
       if ("None" in researcherOpt) {
         return Err({
-          NotFound: `Researcher with id=${researcherId} not found.`,
+          NotFound: `Researcher with id=${ic.caller()} not found.`,
         });
       }
 
       const id = uuidv4();
       const proposal = {
-        id,
-        researcherId,
+        id,  //chenged it to principal
         title,
         description,
         methodology,
@@ -303,10 +323,10 @@ export default Canister({
 
   // Get Proposal by ID
   getProposalById: query(
-    [text], // proposal_id
+    [getProposalByIdPayload], // proposal_id  //add a payload for easier identifications
     Result(ResearchProposal, Message),
     (proposalId) => {
-      const proposalOpt = proposals.get(proposalId);
+      const proposalOpt = proposals.get(proposalId.proposalid);
 
       if ("None" in proposalOpt) {
         return Err({ NotFound: `Proposal with id=${proposalId} not found.` });
@@ -329,12 +349,12 @@ export default Canister({
 
   // Get Proposals by Researcher ID
   getProposalsByResearcherId: query(
-    [text], // researcher_id
+    [getProposalsByResearcherid], // added payload for easier identifications
     Result(Vec(ResearchProposal), Message),
     (researcherId) => {
       const proposalsByResearcher = proposals
         .values()
-        .filter((proposal) => proposal.researcherId === researcherId);
+        .filter((proposal) => proposal.researcherId === researcherId.researcherid);
 
       if (proposalsByResearcher.length === 0) {
         return Err({
